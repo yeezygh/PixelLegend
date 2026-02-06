@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>PixelLegend - Mini RPG</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: #1a1a2e;
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+#gameCanvas {
+  display: block;
+  margin: 0 auto;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+#controls {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  height: 180px;
+  pointer-events: none;
+  z-index: 10;
+}
+.ctrl-btn {
+  position: absolute;
+  width: 58px; height: 58px;
+  border-radius: 14px;
+  border: 3px solid rgba(255,255,255,0.5);
+  background: rgba(0,0,0,0.35);
+  color: #fff;
+  font-size: 24px;
+  font-family: monospace;
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+}
+.ctrl-btn:active, .ctrl-btn.pressed {
+  background: rgba(255,255,255,0.3);
+  border-color: #fff;
+}
+#btn-up    { bottom: 120px; left: 72px; }
+#btn-down  { bottom: 10px;  left: 72px; }
+#btn-left  { bottom: 65px;  left: 12px; }
+#btn-right { bottom: 65px;  left: 132px; }
+#btn-a {
+  bottom: 65px; right: 30px;
+  width: 72px; height: 72px;
+  border-radius: 50%;
+  font-size: 28px;
+  border-color: #f7d354;
+  background: rgba(247,211,84,0.25);
+}
+#btn-a:active, #btn-a.pressed {
+  background: rgba(247,211,84,0.55);
+}
+#loading {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: #1a1a2e; color: #e0d8c0;
+  font-family: monospace; font-size: 18px;
+  z-index: 100;
+}
+</style>
+</head>
+<body>
+<div id="loading">Chargement...</div>
+<canvas id="gameCanvas"></canvas>
+<div id="controls">
+  <div id="btn-up" class="ctrl-btn">&#9650;</div>
+  <div id="btn-down" class="ctrl-btn">&#9660;</div>
+  <div id="btn-left" class="ctrl-btn">&#9664;</div>
+  <div id="btn-right" class="ctrl-btn">&#9654;</div>
+  <div id="btn-a" class="ctrl-btn">A</div>
+</div>
+
+<script>
+// ============================================================
+//  PixelLegend — Mini Top-Down RPG  (single-file, Canvas API)
+// ============================================================
+(() => {
+"use strict";
+
+// ── Constants ────────────────────────────────────────────────
+const TILE  = 16;           // base tile size in px (before scale)
+const COLS  = 20;
+const ROWS  = 15;
+const MAP_W = COLS * TILE;  // 320
+const MAP_H = ROWS * TILE;  // 240
+
+// ── Canvas setup ─────────────────────────────────────────────
+const canvas = document.getElementById("gameCanvas");
+const ctx    = canvas.getContext("2d");
+let scale = 1;
+
+function resize() {
+  const cw = window.innerWidth;
+  const ch = window.innerHeight - 180;          // leave room for controls
+  scale = Math.max(1, Math.min(Math.floor(cw / MAP_W), Math.floor(ch / MAP_H)));
+  canvas.width  = MAP_W * scale;
+  canvas.height = MAP_H * scale;
+  canvas.style.marginTop = Math.max(0, (ch - canvas.height) / 2) + "px";
+  ctx.imageSmoothingEnabled = false;
+}
+window.addEventListener("resize", resize);
+resize();
+
+// ── Tiny sprite-sheet generator (all pixel-art drawn at runtime) ──
+const spriteCache = {};
+
+function makeSprite(key, w, h, drawFn) {
+  if (spriteCache[key]) return spriteCache[key];
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  const x = c.getContext("2d");
+  x.imageSmoothingEnabled = false;
+  drawFn(x, w, h);
+  spriteCache[key] = c;
+  return c;
+}
+
+// ── Color helpers ────────────────────────────────────────────
+function px(c, x, y, w, h) { c.fillStyle = x; c.fillRect(y, w, h || 1, arguments.length > 4 ? h : 1); }
+
+// draw single pixel (context, color, x, y)
+function dot(c, col, x, y) { c.fillStyle = col; c.fillRect(x, y, 1, 1); }
+
+// filled rect helper
+function rect(c, col, x, y, w, h) { c.fillStyle = col; c.fillRect(x, y, w, h); }
+
+// ── Tile sprites (16×16) ─────────────────────────────────────
+
+function drawGrass(c) {
+  rect(c, "#5da130", 0, 0, 16, 16);
+  // random blades
+  const seeds = [1,3,5,9,11,14,2,7,13,6,10];
+  seeds.forEach((s, i) => {
+    dot(c, i % 2 === 0 ? "#6db840" : "#4e9228", s, (i * 3 + 5) % 14);
+  });
+}
+
+function drawDirt(c) {
+  rect(c, "#b08450", 0, 0, 16, 16);
+  [2,5,8,12,3,10,7,14].forEach((s, i) => {
+    dot(c, i % 2 === 0 ? "#c49560" : "#9a7040", s, (i * 4 + 2) % 14);
+  });
+}
+
+function drawFlowerGrass(c) {
+  drawGrass(c);
+  // flowers
+  dot(c, "#f25c5c", 4, 4);
+  dot(c, "#f7d354", 10, 10);
+  dot(c, "#e87de8", 13, 3);
+  dot(c, "#5ca0f2", 2, 12);
+}
+
+function drawWater(c) {
+  rect(c, "#3b8beb", 0, 0, 16, 16);
+  rect(c, "#5ea3f5", 2, 6, 5, 1);
+  rect(c, "#5ea3f5", 10, 11, 4, 1);
+}
+
+function drawHouseBody(c) {
+  // wall
+  rect(c, "#d4b896", 0, 0, 16, 16);
+  rect(c, "#c4a880", 0, 0, 16, 1);
+  rect(c, "#c4a880", 0, 15, 16, 1);
+  // window
+  rect(c, "#3b8beb", 5, 5, 6, 6);
+  rect(c, "#2a6ec0", 8, 5, 1, 6);
+  rect(c, "#2a6ec0", 5, 8, 6, 1);
+}
+
+function drawRoof(c) {
+  rect(c, "#c0392b", 0, 8, 16, 8);
+  rect(c, "#e74c3c", 1, 6, 14, 2);
+  rect(c, "#e74c3c", 3, 4, 10, 2);
+  rect(c, "#d4533e", 5, 2, 6, 2);
+}
+
+function drawDoor(c) {
+  rect(c, "#d4b896", 0, 0, 16, 16);
+  rect(c, "#7a4a2a", 4, 4, 8, 12);
+  rect(c, "#5c3820", 4, 4, 8, 1);
+  dot(c, "#f7d354", 10, 10); // knob
+}
+
+function drawFence(c) {
+  rect(c, "#5da130", 0, 0, 16, 16);  // grass bg
+  rect(c, "#b08450", 2, 4, 2, 12);
+  rect(c, "#b08450", 12, 4, 2, 12);
+  rect(c, "#c49560", 0, 6, 16, 2);
+  rect(c, "#c49560", 0, 11, 16, 2);
+}
+
+function drawTrainingPost(c) {
+  // draw the straw dummy pole
+  rect(c, "#5da130", 0, 0, 16, 16); // grass
+  rect(c, "#7a4a2a", 7, 6, 2, 10);  // pole
+  rect(c, "#d4a830", 4, 2, 8, 8);   // straw body
+  rect(c, "#c49030", 6, 0, 4, 3);   // head
+  rect(c, "#7a4a2a", 3, 5, 2, 2);   // left arm
+  rect(c, "#7a4a2a", 11, 5, 2, 2);  // right arm
+}
+
+function drawSign(c) {
+  rect(c, "#5da130", 0, 0, 16, 16); // grass
+  rect(c, "#7a4a2a", 7, 6, 2, 10);
+  rect(c, "#c49560", 2, 2, 12, 7);
+  rect(c, "#b08450", 2, 2, 12, 1);
+}
+
+// tile IDs
+const T = {
+  GRASS: 0, DIRT: 1, FLOWER: 2, WATER: 3,
+  HOUSE: 4, ROOF: 5, DOOR: 6, FENCE: 7,
+  DUMMY: 8, SIGN: 9
+};
+
+const tileDrawers = {
+  [T.GRASS]:  drawGrass,
+  [T.DIRT]:   drawDirt,
+  [T.FLOWER]: drawFlowerGrass,
+  [T.WATER]:  drawWater,
+  [T.HOUSE]:  drawHouseBody,
+  [T.ROOF]:   drawRoof,
+  [T.DOOR]:   drawDoor,
+  [T.FENCE]:  drawFence,
+  [T.DUMMY]:  drawTrainingPost,
+  [T.SIGN]:   drawSign,
+};
+
+// pre-generate tile canvases
+const tileSprites = {};
+Object.keys(tileDrawers).forEach(id => {
+  tileSprites[id] = makeSprite("tile_" + id, 16, 16, tileDrawers[id]);
+});
+
+// collision: 1 = solid
+const tileSolid = {
+  [T.GRASS]: 0, [T.DIRT]: 0, [T.FLOWER]: 0, [T.WATER]: 1,
+  [T.HOUSE]: 1, [T.ROOF]: 1, [T.DOOR]: 1, [T.FENCE]: 1,
+  [T.DUMMY]: 0, [T.SIGN]: 1
+};
+
+// ── Village Map (20×15) ──────────────────────────────────────
+// prettier-ignore
+const G=T.GRASS,D=T.DIRT,F=T.FLOWER,W=T.WATER,H=T.HOUSE,R=T.ROOF,DR=T.DOOR,FN=T.FENCE,DM=T.DUMMY,SN=T.SIGN;
+// prettier-ignore
+const map = [
+// 0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19
+  [F, G, G, F, G, G, G, G, G, G, G, G, G, G, G, G, F, G, G, F], // 0
+  [G, G, R, R, R, G, G, G, G, G, G, G, G, R, R, R, G, G, G, G], // 1
+  [G, G, H, H, H, G, G, D, D, D, D, D, G, H, H, H, G, G, G, G], // 2
+  [G, G, H, DR,H, G, G, D, G, G, G, D, G, H, DR,H, G, G, G, G], // 3
+  [G, G, G, D, G, G, G, D, G, G, G, D, G, G, D, G, G, G, G, G], // 4
+  [F, G, G, D, D, D, D, D, G, G, G, D, D, D, D, G, G, F, G, F], // 5
+  [G, G, G, G, G, G, G, G, G, SN,G, G, G, G, G, G, G, G, G, G], // 6
+  [G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G, G], // 7
+  [G, G, G, FN,FN,FN,FN,FN,FN,FN,FN,FN,FN,FN,FN,FN,FN,G, G, G], // 8
+  [G, G, G, FN,G, G, G, G, G, G, G, G, G, G, G, G, FN,G, G, G], // 9
+  [G, G, G, FN,G, G, G, DM,G, G, G, DM,G, G, G, G, FN,G, G, G], // 10
+  [G, G, G, FN,G, G, G, G, G, G, G, G, G, G, G, G, FN,G, G, G], // 11
+  [G, G, G, FN,G, G, G, G, G, G, G, G, G, G, G, G, FN,G, G, G], // 12
+  [W, W, G, FN,FN,FN,FN,FN,D, D, D, FN,FN,FN,FN,FN,FN,G, W, W], // 13
+  [W, W, W, G, G, G, G, G, D, F, D, G, G, G, G, G, G, W, W, W], // 14
+];
+
+// ── Character Sprites (16×16, 4 frames per direction) ────────
+
+function drawPlayerFrame(c, dir, frame) {
+  // body
+  rect(c, "#3b7dd8", 5, 5, 6, 7);   // tunic
+  // head
+  rect(c, "#f5d0a0", 5, 1, 6, 5);   // skin
+  // hair
+  rect(c, "#5c3820", 5, 0, 6, 2);
+  // eyes
+  if (dir === 0) { // down
+    dot(c, "#222", 6, 3); dot(c, "#222", 9, 3);
+  } else if (dir === 1) { // up
+    // no eyes visible
+    rect(c, "#5c3820", 5, 1, 6, 3);
+  } else if (dir === 2) { // left
+    dot(c, "#222", 5, 3);
+    rect(c, "#5c3820", 9, 0, 2, 3);
+  } else { // right
+    dot(c, "#222", 10, 3);
+    rect(c, "#5c3820", 5, 0, 2, 3);
+  }
+  // legs
+  const legOff = frame % 2 === 0 ? 0 : 1;
+  rect(c, "#4a3728", 5, 12, 2, 4);
+  rect(c, "#4a3728", 9, 12, 2, 4);
+  if (frame % 2 === 1) {
+    // shift one leg
+    rect(c, "#5da130", 5, 12 + legOff, 2, 1);  // cover
+    rect(c, "#4a3728", 5, 13, 2, 3);
+  }
+  // sword on belt (right side)
+  rect(c, "#a0a0a0", 12, 6, 1, 5);
+  dot(c, "#f7d354", 12, 6);
+}
+
+const playerSprites = [];
+for (let d = 0; d < 4; d++) {
+  playerSprites[d] = [];
+  for (let f = 0; f < 2; f++) {
+    playerSprites[d][f] = makeSprite(`player_${d}_${f}`, 16, 16, c => drawPlayerFrame(c, d, f));
+  }
+}
+
+// ── NPC: Village Chief ──────────────────────────────────────
+function drawChiefFrame(c, dir, frame) {
+  // robe
+  rect(c, "#8e44ad", 4, 5, 8, 8);
+  // head
+  rect(c, "#f5d0a0", 5, 1, 6, 5);
+  // beard
+  rect(c, "#ccc", 6, 4, 4, 3);
+  // hat
+  rect(c, "#f7d354", 4, 0, 8, 2);
+  rect(c, "#f7c030", 5, -1 < 0 ? 0 : 0, 6, 1);
+  // eyes
+  if (dir === 0 || dir === 2 || dir === 3) {
+    dot(c, "#222", 6, 3); dot(c, "#222", 9, 3);
+  }
+  // staff
+  rect(c, "#7a4a2a", 13, 2, 1, 14);
+  dot(c, "#5ef7f7", 13, 1);
+  // legs
+  rect(c, "#5c3820", 5, 13, 2, 3);
+  rect(c, "#5c3820", 9, 13, 2, 3);
+}
+
+const chiefSprites = [];
+for (let d = 0; d < 4; d++) {
+  chiefSprites[d] = makeSprite(`chief_${d}`, 16, 16, c => drawChiefFrame(c, d, 0));
+}
+
+// ── Attack animation sprite ─────────────────────────────────
+const slashSprite = makeSprite("slash", 16, 16, c => {
+  c.strokeStyle = "#fff";
+  c.lineWidth = 2;
+  c.beginPath();
+  c.arc(8, 8, 6, -Math.PI * 0.3, Math.PI * 0.3);
+  c.stroke();
+  c.strokeStyle = "#f7d354";
+  c.lineWidth = 1;
+  c.beginPath();
+  c.arc(8, 8, 5, -Math.PI * 0.2, Math.PI * 0.2);
+  c.stroke();
+});
+
+// ── Game State ───────────────────────────────────────────────
+const player = {
+  x: 9 * TILE, y: 7 * TILE,
+  dir: 0,          // 0=down 1=up 2=left 3=right
+  frame: 0,
+  frameTimer: 0,
+  speed: 1.5,
+  isAttacking: false,
+  attackTimer: 0,
+};
+
+const chief = {
+  x: 9 * TILE, y: 5 * TILE,
+  dir: 0,
+};
+
+// dummy targets
+const dummies = [
+  { x: 7, y: 10, hp: 3, maxHp: 3, shakeTimer: 0 },
+  { x: 11, y: 10, hp: 3, maxHp: 3, shakeTimer: 0 },
+];
+
+const gameState = {
+  phase: "explore",    // explore | dialogue | combat | complete
+  dialogueLines: [],
+  dialogueIndex: 0,
+  dialogueFinished: false,
+  tutorialDone: false,
+  totalHits: 0,
+  messageText: "",
+  messageTimer: 0,
+  fadeIn: 1,           // intro fade
+};
+
+// ── Input ────────────────────────────────────────────────────
+const input = { up: false, down: false, left: false, right: false, action: false, actionPressed: false };
+
+// keyboard
+const keyMap = {
+  ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right",
+  w: "up", s: "down", a: "left", d: "right",
+  z: "up", q: "left",           // AZERTY
+  " ": "action", Enter: "action", e: "action",
+};
+document.addEventListener("keydown", e => {
+  const k = keyMap[e.key];
+  if (k) { if (k === "action" && !input[k]) input.actionPressed = true; input[k] = true; e.preventDefault(); }
+});
+document.addEventListener("keyup", e => {
+  const k = keyMap[e.key];
+  if (k) { input[k] = false; e.preventDefault(); }
+});
+
+// touch buttons
+function bindBtn(id, key) {
+  const el = document.getElementById(id);
+  const start = () => { if (key === "action" && !input[key]) input.actionPressed = true; input[key] = true; el.classList.add("pressed"); };
+  const end   = () => { input[key] = false; el.classList.remove("pressed"); };
+  el.addEventListener("touchstart", e => { e.preventDefault(); start(); });
+  el.addEventListener("touchend",   e => { e.preventDefault(); end(); });
+  el.addEventListener("touchcancel",e => { e.preventDefault(); end(); });
+  el.addEventListener("mousedown",  start);
+  el.addEventListener("mouseup",    end);
+  el.addEventListener("mouseleave", end);
+}
+bindBtn("btn-up",    "up");
+bindBtn("btn-down",  "down");
+bindBtn("btn-left",  "left");
+bindBtn("btn-right", "right");
+bindBtn("btn-a",     "action");
+
+// ── Collision ────────────────────────────────────────────────
+function solidAt(px, py) {
+  const tx = Math.floor(px / TILE);
+  const ty = Math.floor(py / TILE);
+  if (tx < 0 || ty < 0 || tx >= COLS || ty >= ROWS) return true;
+  return tileSolid[map[ty][tx]] === 1;
+}
+
+function entityCollision(ax, ay, aw, ah, bx, by, bw, bh) {
+  return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+}
+
+// ── Dialogue System ──────────────────────────────────────────
+const dialogueIntro = [
+  "Chef du Village : Bienvenue, jeune aventurier !",
+  "Chef du Village : Notre village est paisible...",
+  "Chef du Village : ...mais des dangers rodent au-dela des collines.",
+  "Chef du Village : Tu dois t'entrainer avant de partir !",
+  "Chef du Village : Va dans la zone d'entrainement au sud.",
+  "Chef du Village : Frappe les mannequins de paille avec le bouton A !",
+  "Chef du Village : Detruis-les tous et tu seras pret. Bonne chance !",
+];
+
+const dialogueComplete = [
+  "Chef du Village : Excellent travail, aventurier !",
+  "Chef du Village : Tu as prouve ta valeur au combat.",
+  "Chef du Village : Le monde t'attend... Sois courageux !",
+  "Chef du Village : (Fin du tutoriel — Merci d'avoir joue !)",
+];
+
+function startDialogue(lines) {
+  gameState.phase = "dialogue";
+  gameState.dialogueLines = lines;
+  gameState.dialogueIndex = 0;
+  gameState.dialogueFinished = false;
+}
+
+// ── Update ───────────────────────────────────────────────────
+function update() {
+  // fade in
+  if (gameState.fadeIn > 0) gameState.fadeIn -= 0.02;
+
+  // message timer
+  if (gameState.messageTimer > 0) gameState.messageTimer--;
+
+  // attack timer
+  if (player.isAttacking) {
+    player.attackTimer--;
+    if (player.attackTimer <= 0) player.isAttacking = false;
+  }
+
+  // -- Dialogue phase --
+  if (gameState.phase === "dialogue") {
+    if (input.actionPressed) {
+      input.actionPressed = false;
+      gameState.dialogueIndex++;
+      if (gameState.dialogueIndex >= gameState.dialogueLines.length) {
+        gameState.phase = gameState.tutorialDone ? "complete" : "combat";
+        gameState.dialogueFinished = true;
+        if (gameState.phase === "combat") {
+          gameState.messageText = "Detruisez les mannequins ! (Bouton A)";
+          gameState.messageTimer = 180;
+        }
+      }
+    }
+    input.actionPressed = false;
+    return;
+  }
+
+  // -- Movement --
+  let dx = 0, dy = 0;
+  if (input.up)    { dy = -player.speed; player.dir = 1; }
+  if (input.down)  { dy =  player.speed; player.dir = 0; }
+  if (input.left)  { dx = -player.speed; player.dir = 2; }
+  if (input.right) { dx =  player.speed; player.dir = 3; }
+
+  if (dx !== 0 || dy !== 0) {
+    // animate
+    player.frameTimer++;
+    if (player.frameTimer > 10) { player.frame = (player.frame + 1) % 2; player.frameTimer = 0; }
+
+    // collision check (4 corners of 10x12 hitbox)
+    const hw = 10, hh = 12;
+    const ox = 3, oy = 4;
+    let nx = player.x + dx;
+    let ny = player.y + dy;
+
+    // entity: chief
+    const chiefBlock = entityCollision(nx + ox, ny + oy, hw, hh, chief.x + 3, chief.y + 4, 10, 12);
+
+    // x-axis
+    if (!chiefBlock &&
+        !solidAt(nx + ox, player.y + oy) &&
+        !solidAt(nx + ox + hw - 1, player.y + oy) &&
+        !solidAt(nx + ox, player.y + oy + hh - 1) &&
+        !solidAt(nx + ox + hw - 1, player.y + oy + hh - 1)) {
+      player.x = nx;
+    }
+    nx = player.x;
+    ny = player.y + dy;
+    const chiefBlock2 = entityCollision(nx + ox, ny + oy, hw, hh, chief.x + 3, chief.y + 4, 10, 12);
+    if (!chiefBlock2 &&
+        !solidAt(nx + ox, ny + oy) &&
+        !solidAt(nx + ox + hw - 1, ny + oy) &&
+        !solidAt(nx + ox, ny + oy + hh - 1) &&
+        !solidAt(nx + ox + hw - 1, ny + oy + hh - 1)) {
+      player.y = ny;
+    }
+
+    // clamp to map
+    player.x = Math.max(0, Math.min(player.x, MAP_W - TILE));
+    player.y = Math.max(0, Math.min(player.y, MAP_H - TILE));
+  }
+
+  // -- Action button --
+  if (input.actionPressed) {
+    input.actionPressed = false;
+
+    if (gameState.phase === "explore") {
+      // check proximity to chief
+      const dist = Math.abs(player.x - chief.x) + Math.abs(player.y - chief.y);
+      if (dist < TILE * 2.5) {
+        // face chief
+        chief.dir = player.dir === 0 ? 1 : player.dir === 1 ? 0 : player.dir === 2 ? 3 : 2;
+        startDialogue(dialogueIntro);
+      } else if (!gameState.dialogueFinished) {
+        gameState.messageText = "Parlez au Chef du Village !";
+        gameState.messageTimer = 120;
+      }
+    }
+
+    if (gameState.phase === "combat" && !player.isAttacking) {
+      // attack!
+      player.isAttacking = true;
+      player.attackTimer = 12;
+
+      // check hit on dummies
+      dummies.forEach(dm => {
+        if (dm.hp <= 0) return;
+        const dmPx = dm.x * TILE, dmPy = dm.y * TILE;
+        const dist = Math.abs(player.x - dmPx) + Math.abs(player.y - dmPy);
+        // also check facing direction
+        let facing = false;
+        if (player.dir === 0 && player.y < dmPy) facing = true;
+        if (player.dir === 1 && player.y > dmPy) facing = true;
+        if (player.dir === 2 && player.x > dmPx) facing = true;
+        if (player.dir === 3 && player.x < dmPx) facing = true;
+        if (dist < TILE * 2 && facing) {
+          dm.hp--;
+          dm.shakeTimer = 8;
+          gameState.totalHits++;
+          if (dm.hp <= 0) {
+            gameState.messageText = "Mannequin detruit !";
+            gameState.messageTimer = 90;
+          }
+        }
+      });
+
+      // check all done
+      if (dummies.every(d => d.hp <= 0) && !gameState.tutorialDone) {
+        gameState.tutorialDone = true;
+        setTimeout(() => {
+          startDialogue(dialogueComplete);
+        }, 600);
+      }
+    }
+
+    if (gameState.phase === "complete") {
+      // restart dummies for replay
+      dummies.forEach(d => { d.hp = d.maxHp; d.shakeTimer = 0; });
+      gameState.tutorialDone = false;
+      gameState.totalHits = 0;
+      gameState.phase = "explore";
+      gameState.dialogueFinished = false;
+    }
+  }
+
+  // dummy shake
+  dummies.forEach(d => { if (d.shakeTimer > 0) d.shakeTimer--; });
+}
+
+// ── Render ───────────────────────────────────────────────────
+function render() {
+  ctx.save();
+  ctx.scale(scale, scale);
+
+  // sky bg
+  rect(ctx, "#87CEEB", 0, 0, MAP_W, MAP_H);
+
+  // tiles
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const tid = map[r][c];
+      const spr = tileSprites[tid];
+      if (spr) ctx.drawImage(spr, c * TILE, r * TILE);
+    }
+  }
+
+  // dummies (redraw on top with HP bars)
+  dummies.forEach(dm => {
+    if (dm.hp <= 0) return;
+    const dx = dm.shakeTimer > 0 ? (dm.shakeTimer % 2 === 0 ? -1 : 1) : 0;
+    ctx.drawImage(tileSprites[T.DUMMY], dm.x * TILE + dx, dm.y * TILE);
+    // HP bar
+    const bx = dm.x * TILE + 2, by = dm.y * TILE - 4;
+    rect(ctx, "#222", bx - 1, by - 1, 14, 5);
+    rect(ctx, "#c0392b", bx, by, 12, 3);
+    rect(ctx, "#2ecc71", bx, by, Math.max(0, 12 * (dm.hp / dm.maxHp)), 3);
+  });
+
+  // chief NPC
+  ctx.drawImage(chiefSprites[chief.dir], chief.x, chief.y);
+
+  // player
+  ctx.drawImage(playerSprites[player.dir][player.frame], player.x, player.y);
+
+  // attack slash effect
+  if (player.isAttacking) {
+    let sx = player.x, sy = player.y;
+    if (player.dir === 0) sy += TILE;
+    if (player.dir === 1) sy -= TILE;
+    if (player.dir === 2) sx -= TILE;
+    if (player.dir === 3) sx += TILE;
+    ctx.globalAlpha = player.attackTimer / 12;
+    ctx.drawImage(slashSprite, sx, sy);
+    ctx.globalAlpha = 1;
+  }
+
+  // interaction hint (proximity to chief)
+  if (gameState.phase === "explore" && !gameState.dialogueFinished) {
+    const dist = Math.abs(player.x - chief.x) + Math.abs(player.y - chief.y);
+    if (dist < TILE * 2.5) {
+      ctx.fillStyle = "#fff";
+      ctx.font = "5px monospace";
+      ctx.textAlign = "center";
+      ctx.fillText("Appuyez A", chief.x + 8, chief.y - 4);
+    }
+  }
+
+  // -- Dialogue box --
+  if (gameState.phase === "dialogue") {
+    // semi-transparent box at bottom
+    rect(ctx, "rgba(0,0,0,0.80)", 8, MAP_H - 56, MAP_W - 16, 48);
+    rect(ctx, "#f7d354", 8, MAP_H - 56, MAP_W - 16, 2);
+
+    ctx.fillStyle = "#fff";
+    ctx.font = "7px monospace";
+    ctx.textAlign = "left";
+
+    const line = gameState.dialogueLines[gameState.dialogueIndex] || "";
+    // word wrap
+    const maxW = MAP_W - 32;
+    const words = line.split(" ");
+    let currentLine = "";
+    let lines = [];
+    words.forEach(word => {
+      const test = currentLine ? currentLine + " " + word : word;
+      if (ctx.measureText(test).width > maxW) {
+        lines.push(currentLine);
+        currentLine = word;
+      } else {
+        currentLine = test;
+      }
+    });
+    if (currentLine) lines.push(currentLine);
+
+    lines.forEach((l, i) => {
+      ctx.fillText(l, 16, MAP_H - 40 + i * 10);
+    });
+
+    // continue prompt
+    ctx.fillStyle = "#f7d354";
+    ctx.font = "5px monospace";
+    ctx.textAlign = "right";
+    const prompt = gameState.dialogueIndex < gameState.dialogueLines.length - 1 ? "A : Suite >>>" : "A : Fermer";
+    ctx.fillText(prompt, MAP_W - 16, MAP_H - 12);
+  }
+
+  // -- HUD message --
+  if (gameState.messageTimer > 0) {
+    const alpha = Math.min(1, gameState.messageTimer / 30);
+    ctx.globalAlpha = alpha;
+    rect(ctx, "rgba(0,0,0,0.7)", 20, 4, MAP_W - 40, 16);
+    ctx.fillStyle = "#f7d354";
+    ctx.font = "6px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(gameState.messageText, MAP_W / 2, 15);
+    ctx.globalAlpha = 1;
+  }
+
+  // -- Combat HUD --
+  if (gameState.phase === "combat") {
+    ctx.fillStyle = "#fff";
+    ctx.font = "5px monospace";
+    ctx.textAlign = "left";
+    const alive = dummies.filter(d => d.hp > 0).length;
+    ctx.fillText("Mannequins restants : " + alive, 4, 8);
+  }
+
+  // -- Complete overlay --
+  if (gameState.phase === "complete") {
+    ctx.globalAlpha = 0.6;
+    rect(ctx, "#000", 0, 0, MAP_W, MAP_H);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "#f7d354";
+    ctx.font = "bold 12px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("Tutoriel Termine !", MAP_W / 2, MAP_H / 2 - 10);
+    ctx.fillStyle = "#fff";
+    ctx.font = "7px monospace";
+    ctx.fillText("Bravo, aventurier !", MAP_W / 2, MAP_H / 2 + 6);
+    ctx.font = "5px monospace";
+    ctx.fillText("Appuyez A pour recommencer", MAP_W / 2, MAP_H / 2 + 20);
+  }
+
+  // -- Fade in --
+  if (gameState.fadeIn > 0) {
+    ctx.globalAlpha = gameState.fadeIn;
+    rect(ctx, "#1a1a2e", 0, 0, MAP_W, MAP_H);
+    ctx.globalAlpha = 1;
+  }
+
+  ctx.restore();
+}
+
+// ── Game Loop ────────────────────────────────────────────────
+let lastTime = 0;
+let accumulator = 0;
+const STEP = 1000 / 60;
+
+function gameLoop(timestamp) {
+  const dt = timestamp - lastTime;
+  lastTime = timestamp;
+  accumulator += dt;
+
+  while (accumulator >= STEP) {
+    update();
+    input.actionPressed = false;
+    accumulator -= STEP;
+  }
+
+  render();
+  requestAnimationFrame(gameLoop);
+}
+
+// ── Start ────────────────────────────────────────────────────
+document.getElementById("loading").style.display = "none";
+gameState.messageText = "Parlez au Chef du Village !";
+gameState.messageTimer = 180;
+requestAnimationFrame(gameLoop);
+
+})();
+</script>
+</body>
+</html>
